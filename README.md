@@ -28,4 +28,4 @@ Moringa School - AI Capstone Project
 December 2025
 
 
-*This README will be updated as the project progresses*
+*Please refer to GUIDE.md for docker related details*
