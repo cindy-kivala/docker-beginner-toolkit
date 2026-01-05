@@ -3,3 +3,4 @@
 # Will be updated if we add more features
 Flask==3.0.0
 Werkzeug==3.0.1
+redis==5.0.1

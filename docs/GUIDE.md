@@ -1452,6 +1452,789 @@ docker rm my-app
 ```
 
 ---
+## Advanced Features: Multi-Container Setup
+
+Now that you understand the basics, let's build something more realistic - a multi-container application using Docker Compose!
+
+### What is Docker Compose?
+
+Docker Compose is a tool for defining and running multi-container Docker applications. Instead of running `docker run` commands manually for each container, you define everything in a `docker-compose.yml` file.
+
+**Real-world use cases:**
+- Web app + Database + Cache (Redis)
+- Microservices architecture
+- Development environments with multiple services
+
+**Benefits:**
+- Start all services with one command: `docker-compose up`
+- Automatic networking between containers
+- Easy configuration management
+- Reproducible environments
+
+---
+
+### Architecture: Flask + Redis
+
+We'll enhance our Flask application to use Redis as a cache for storing visitor counts.
+
+**Architecture diagram:**
+```
+┌─────────────────┐         ┌─────────────────┐
+│  Flask Web App  │ ◄─────► │  Redis Cache    │
+│  (Port 5000)    │         │  (Port 6379)    │
+│  Container 1    │         │  Container 2    │
+└─────────────────┘         └─────────────────┘
+         │                           │
+         └────── Docker Network ─────┘
+```
+
+**Why Redis?**
+- Fast in-memory data storage
+- Perfect for caching and counters
+- Industry-standard for session management
+- Demonstrates container-to-container communication
+
+---
+
+### Step 1: Update Application Code
+
+We need to modify our Flask app to communicate with Redis.
+
+**File: example-app/app.py (key changes highlighted)**
+
+Add Redis import at the top:
+```python
+import redis
+```
+
+Add Redis connection:
+```python
+# Connect to Redis (will be in separate container)
+try:
+    redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
+    redis_available = True
+except:
+    redis_available = False
+```
+
+**🔍 Important:** `host='redis'` matches the service name in docker-compose.yml. Docker Compose creates DNS entries automatically!
+
+Update the home route to use Redis:
+```python
+@app.route('/')
+def home():
+    # Increment visitor counter in Redis
+    if redis_available:
+        visits = redis_client.incr('visitor_count')
+    else:
+        visits = "N/A"
+    
+    # ... rest of the code
+```
+
+**What `.incr()` does:**
+- Gets current value from Redis
+- Increments it by 1
+- Saves it back
+- Returns new value
+- All in one atomic operation!
+
+Add a reset endpoint:
+```python
+@app.route('/reset')
+def reset():
+    """Reset visitor counter"""
+    if redis_available:
+        redis_client.set('visitor_count', 0)
+        return jsonify({'message': 'Counter reset!', 'count': 0}), 200
+    return jsonify({'error': 'Redis not available'}), 500
+```
+
+**Complete updated app.py:** [See complete file in previous section]
+
+---
+
+### Step 2: Update Requirements
+
+**File: example-app/requirements.txt**
+
+Add Redis client library:
+```
+Flask==3.0.0
+Werkzeug==3.0.1
+redis==5.0.1
+```
+
+**What this library does:** Provides Python interface to communicate with Redis server.
+
+---
+
+### Step 3: Create Docker Compose Configuration
+
+**File: example-app/docker-compose.yml**
+```yaml
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: flask-app
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+    environment:
+      - FLASK_ENV=development
+      - APP_TITLE=Docker Multi-Container Platform
+      - APP_AUTHOR=Your Name
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+```
+
+**Let's break down this file:**
+
+#### Version
+```yaml
+version: '3.8'
+```
+- Docker Compose file format version
+- '3.8' is stable and widely supported
+
+#### Services Section
+
+**Web Service:**
+```yaml
+web:
+  build: .                    # Build from Dockerfile in current directory
+  container_name: flask-app   # Friendly name for the container
+  ports:
+    - "5000:5000"            # Map host:container ports
+  depends_on:
+    - redis                   # Start redis before web
+  environment:               # Environment variables
+    - FLASK_ENV=development
+    - APP_TITLE=Docker Multi-Container Platform
+  networks:
+    - app-network            # Connect to custom network
+  restart: unless-stopped    # Auto-restart if crashes
+```
+
+**Key points:**
+- `build: .` - Builds image from local Dockerfile
+- `depends_on` - Ensures Redis starts first (but doesn't wait for it to be "ready")
+- `environment` - Pass configuration to container
+- `restart: unless-stopped` - Production best practice
+
+**Redis Service:**
+```yaml
+redis:
+  image: redis:7-alpine      # Use official Redis image (alpine = smaller)
+  container_name: redis-cache
+  ports:
+    - "6379:6379"            # Redis default port
+  networks:
+    - app-network
+  volumes:
+    - redis-data:/data       # Persist Redis data
+  restart: unless-stopped
+```
+
+**Key points:**
+- `image:` instead of `build:` - Uses pre-built image from Docker Hub
+- `alpine` variant - Smaller, faster, more secure
+- `volumes:` - Data persists even if container is removed!
+
+#### Networks Section
+```yaml
+networks:
+  app-network:
+    driver: bridge
+```
+
+**What this does:**
+- Creates isolated network for our services
+- Containers can communicate by service name
+- `bridge` driver is default for single-host networking
+
+**Example:** Flask container can reach Redis at `redis:6379`
+
+#### Volumes Section
+```yaml
+volumes:
+  redis-data:
+```
+
+**What this does:**
+- Creates named volume for Redis data
+- Data survives container restarts
+- Managed by Docker (stored in `/var/lib/docker/volumes/`)
+
+---
+
+### Step 4: Build and Run Multi-Container Application
+
+**Stop any running containers first:**
+```bash
+# Stop single container if running
+docker stop flask-docker-app
+docker rm flask-docker-app
+```
+
+**Navigate to project:**
+```bash
+cd ~/Development/code/Personal-Projects/docker-beginner-toolkit/example-app
+```
+
+**Build and start all services:**
+```bash
+docker-compose up --build
+```
+
+**Breaking down this command:**
+- `docker-compose` - Use Compose tool
+- `up` - Start services
+- `--build` - Rebuild images before starting
+
+**Expected output:**
+```
+Creating network "example-app_app-network" with the default driver
+Creating volume "example-app_redis-data" with default driver
+Building web
+[+] Building 15.2s (10/10) FINISHED
+...
+Creating redis-cache ... done
+Creating flask-app   ... done
+Attaching to redis-cache, flask-app
+redis-cache    | 1:C 17 Dec 2024 12:00:00.000 # oO0OoO0OoO0Oo Redis is starting
+flask-app      |  * Serving Flask app 'app'
+flask-app      |  * Running on all addresses (0.0.0.0)
+flask-app      |  * Running on http://127.0.0.1:5000
+```
+
+**What just happened:**
+1. Created custom network
+2. Created named volume for Redis data
+3. Built Flask container from Dockerfile
+4. Pulled Redis image from Docker Hub
+5. Started Redis container first
+6. Started Flask container second
+7. Connected both to same network
+8. Application is now running!
+
+---
+
+### Step 5: Test Multi-Container Application
+
+**Open browser:** http://localhost:5000
+
+**You should see:**
+- 👥 **Visitors counter** (starts at 1)
+- 🔴 **Redis Status:** Connected
+- Beautiful animated interface
+- Real-time visitor tracking
+
+**Refresh the page multiple times** - counter increases! 
+
+**Screenshot this!** It proves multi-container communication is working.
+
+---
+
+### Step 6: Verify Containers Are Running
+
+**Open new terminal:**
+```bash
+docker-compose ps
+```
+
+**Expected output:**
+```
+     Name                   Command               State           Ports         
+--------------------------------------------------------------------------------
+flask-app       python app.py                    Up      0.0.0.0:5000->5000/tcp
+redis-cache     docker-entrypoint.sh redis ...   Up      0.0.0.0:6379->6379/tcp
+```
+
+**Both containers are Up!** 
+
+**Check logs:**
+```bash
+# All logs
+docker-compose logs
+
+# Just Flask logs
+docker-compose logs web
+
+# Just Redis logs
+docker-compose logs redis
+
+# Follow logs in real-time
+docker-compose logs -f
+```
+
+---
+
+### Step 7: Test Data Persistence
+
+**Test that data survives container restarts:**
+```bash
+# Visit site, note visitor count (e.g., 15)
+
+# Stop containers
+docker-compose down
+
+# Start again
+docker-compose up -d
+
+# Visit site again - counter continues from 15! 
+```
+
+**Why it persists:**
+- Redis data is stored in named volume `redis-data`
+- Volume survives even when containers are removed
+- When Redis restarts, it reloads data from volume
+
+**To completely reset (including data):**
+```bash
+docker-compose down -v  # -v removes volumes too
+```
+
+---
+
+### Step 8: Test Container Networking
+
+**Prove containers can talk to each other:**
+
+**Enter Flask container:**
+```bash
+docker exec -it flask-app bash
+```
+
+**Ping Redis by service name:**
+```bash
+ping redis
+# PING redis (172.18.0.2) 56(84) bytes of data.
+# 64 bytes from redis-cache.example-app_app-network (172.18.0.2): icmp_seq=1 ttl=64 time=0.045 ms
+```
+
+**Connect to Redis directly:**
+```bash
+# Install redis-cli in Flask container
+apt-get update && apt-get install -y redis-tools
+
+# Connect to Redis
+redis-cli -h redis
+
+# Get visitor count
+redis:6379> GET visitor_count
+"15"
+
+# Exit
+redis:6379> exit
+exit
+```
+
+**This proves Docker Compose automatically:**
+- Created DNS entries (flask-app can reach `redis` by name)
+- Configured networking (containers are on same network)
+- Enabled service discovery (no hardcoded IP addresses needed!)
+
+---
+
+### Managing Multi-Container Application
+
+**Common Docker Compose commands:**
+```bash
+# Start in background (detached mode)
+docker-compose up -d
+
+# Stop services (containers removed, volumes kept)
+docker-compose down
+
+# Stop and remove everything including volumes
+docker-compose down -v
+
+# View running services
+docker-compose ps
+
+# View logs
+docker-compose logs
+docker-compose logs -f        # Follow logs
+docker-compose logs web       # Specific service
+
+# Restart a service
+docker-compose restart web
+
+# Rebuild and restart
+docker-compose up --build
+
+# Stop one service
+docker-compose stop web
+
+# Start one service
+docker-compose start web
+
+# Execute command in service
+docker-compose exec web bash
+
+# Scale services (run multiple instances)
+docker-compose up -d --scale web=3
+```
+
+---
+
+### Adding REST API Endpoints
+
+Let's make the application more interactive by adding API endpoints!
+
+**Add to app.py:**
+```python
+from flask import request, jsonify
+
+# In-memory storage for tasks
+tasks = []
+
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    """Get all tasks"""
+    return jsonify({
+        'tasks': tasks,
+        'count': len(tasks),
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/tasks', methods=['POST'])
+def add_task():
+    """Add a new task"""
+    data = request.get_json()
+    if not data or 'title' not in data:
+        return jsonify({'error': 'Title required'}), 400
+    
+    task = {
+        'id': len(tasks) + 1,
+        'title': data['title'],
+        'completed': False,
+        'created_at': datetime.now().isoformat()
+    }
+    tasks.append(task)
+    return jsonify(task), 201
+
+@app.route('/api/tasks/', methods=['DELETE'])
+def delete_task(task_id):
+    """Delete a task"""
+    global tasks
+    tasks = [t for t in tasks if t['id'] != task_id]
+    return jsonify({'message': 'Task deleted', 'id': task_id}), 200
+
+@app.route('/api/stats')
+def stats():
+    """Container statistics"""
+    return jsonify({
+        'container_id': os.uname().nodename,
+        'timestamp': datetime.now().isoformat(),
+        'total_tasks': len(tasks),
+        'total_visitors': redis_client.get('visitor_count') if redis_available else 'N/A',
+        'redis_status': 'connected' if redis_available else 'disconnected',
+        'environment': 'Docker Multi-Container Setup'
+    })
+```
+
+**Rebuild and restart:**
+```bash
+docker-compose up --build -d
+```
+
+**Test the API with curl:**
+```bash
+# Get all tasks (initially empty)
+curl http://localhost:5000/api/tasks
+
+# Add a task
+curl -X POST http://localhost:5000/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Learn Docker Compose"}'
+
+# Add another task
+curl -X POST http://localhost:5000/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Build multi-container app"}'
+
+# Get all tasks (now has 2 tasks)
+curl http://localhost:5000/api/tasks
+
+# Get container stats
+curl http://localhost:5000/api/stats
+
+# Delete a task
+curl -X DELETE http://localhost:5000/api/tasks/1
+
+# Get tasks again (task 1 is gone)
+curl http://localhost:5000/api/tasks
+```
+
+**Expected output (pretty-printed):**
+```bash
+# GET /api/tasks
+{
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Learn Docker Compose",
+      "completed": false,
+      "created_at": "2024-12-17T12:30:45.123456"
+    },
+    {
+      "id": 2,
+      "title": "Build multi-container app",
+      "completed": false,
+      "created_at": "2024-12-17T12:31:02.789012"
+    }
+  ],
+  "count": 2,
+  "timestamp": "2024-12-17T12:31:15.456789"
+}
+
+# GET /api/stats
+{
+  "container_id": "a1b2c3d4e5f6",
+  "timestamp": "2024-12-17T12:32:00.123456",
+  "total_tasks": 2,
+  "total_visitors": "47",
+  "redis_status": "connected",
+  "environment": "Docker Multi-Container Setup"
+}
+```
+
+**Test with Postman or browser extensions for better visualization!**
+
+---
+
+### Understanding the Complete Architecture
+
+**Full system diagram:**
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Docker Host                           │
+│                                                          │
+│  ┌────────────────────────────────────────────────┐    │
+│  │         Docker Network: app-network             │    │
+│  │                                                  │    │
+│  │  ┌──────────────────┐    ┌──────────────────┐ │    │
+│  │  │   Flask Web App  │    │   Redis Cache    │ │    │
+│  │  │                  │    │                  │ │    │
+│  │  │  - Port: 5000    │◄───┤  - Port: 6379    │ │    │
+│  │  │  - API Endpoints │    │  - Data Storage  │ │    │
+│  │  │  - Visitor Count │    │  - Persistence   │ │    │
+│  │  └──────────────────┘    └──────────────────┘ │    │
+│  │          │                        │            │    │
+│  └──────────┼────────────────────────┼────────────┘    │
+│             │                        │                  │
+│          Port 5000               Port 6379              │
+│             │                        │                  │
+└─────────────┼────────────────────────┼──────────────────┘
+              │                        │
+              ▼                        ▼
+       Your Browser              Redis CLI
+    (localhost:5000)         (localhost:6379)
+```
+
+**Data flow example - Visitor Counter:**
+
+1. User opens http://localhost:5000 in browser
+2. Request hits Docker host on port 5000
+3. Docker routes to Flask container
+4. Flask app executes: `redis_client.incr('visitor_count')`
+5. Request goes through Docker network to Redis container
+6. Redis increments counter and returns new value
+7. Flask renders HTML with new count
+8. Response sent back to browser
+9. User sees updated visitor count!
+
+**All this happens in milliseconds!** ⚡
+
+---
+
+### What You've Learned
+
+**By completing this advanced section, you now understand:**
+
+**Docker Compose** - Orchestrating multiple containers
+**Service Dependencies** - Ensuring correct startup order
+**Container Networking** - Service discovery and DNS
+**Data Persistence** - Using volumes for stateful data
+**Inter-Container Communication** - Containers talking to each other
+**Environment Configuration** - Managing settings with env vars
+**REST API Development** - Building backend endpoints
+**Production Patterns** - Restart policies, health checks
+
+**These are real-world, production-ready skills!** 
+
+---
+
+### Troubleshooting Multi-Container Setup
+
+#### Issue: "redis: Name or service not known"
+
+**Symptom:** Flask can't connect to Redis
+
+**Cause:** Containers not on same network
+
+**Solution:**
+```bash
+# Check networks
+docker network ls
+
+# Verify both containers on same network
+docker network inspect example-app_app-network
+
+# Restart with compose
+docker-compose down
+docker-compose up
+```
+
+---
+
+#### Issue: Visitor count doesn't persist
+
+**Symptom:** Counter resets to 1 after `docker-compose down`
+
+**Cause:** Volume not created or deleted
+
+**Solution:**
+```bash
+# Check volumes
+docker volume ls
+
+# Inspect volume
+docker volume inspect example-app_redis-data
+
+# Don't use -v flag when stopping:
+docker-compose down      
+docker-compose down -v   
+```
+
+---
+
+#### Issue: Port 6379 already in use
+
+**Symptom:** Redis container fails to start
+
+**Cause:** Redis already running on host
+
+**Solution:**
+```bash
+# Check what's using port
+sudo lsof -i :6379
+
+# Stop it
+sudo systemctl stop redis
+
+# Or use different port in docker-compose.yml:
+ports:
+  - "6380:6379"  # Map to 6380 instead
+```
+
+---
+
+#### Issue: Changes to app.py not reflecting
+
+**Symptom:** Modified code doesn't run
+
+**Cause:** Need to rebuild image
+
+**Solution:**
+```bash
+# Rebuild and restart
+docker-compose up --build
+
+# Or rebuild without starting
+docker-compose build
+docker-compose up
+```
+
+---
+
+### Best Practices for Multi-Container Applications
+
+1. **Use .env files for configuration**
+```bash
+   # .env
+   FLASK_ENV=development
+   REDIS_PORT=6379
+   APP_TITLE=My App
+```
+
+2. **Health checks for reliability**
+```yaml
+   web:
+     healthcheck:
+       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+       interval: 30s
+       timeout: 10s
+       retries: 3
+```
+
+3. **Resource limits for stability**
+```yaml
+   web:
+     deploy:
+       resources:
+         limits:
+           cpus: '0.5'
+           memory: 512M
+```
+
+4. **Logging configuration**
+```yaml
+   web:
+     logging:
+       driver: "json-file"
+       options:
+         max-size: "10m"
+         max-file: "3"
+```
+
+5. **Use specific image tags (not :latest)**
+```yaml
+   redis:
+     image: redis:7.0.15-alpine  # ✅ Specific version
+     # NOT: redis:latest         # ❌ Unpredictable
+```
+
+---
+
+### Next Steps with Multi-Container Apps
+
+Now that you have a working multi-container setup, you could:
+
+1. **Add a database** (PostgreSQL or MySQL)
+2. **Add a reverse proxy** (Nginx for load balancing)
+3. **Add monitoring** (Prometheus + Grafana)
+4. **Deploy to cloud** (AWS ECS, Google Cloud Run)
+5. **Migrate to Kubernetes** for production scale
+
+**You now have the foundation for modern, scalable applications!** 🚀
+
+---
+```
 
 ## Common Issues & Solutions
 
@@ -1736,3 +2519,4 @@ Vague questions - "Docker isn't working" got generic responses
 Too broad - "Teach me everything about Docker" was overwhelming
 Assuming knowledge - Not mentioning my OS caused problems
 No examples - AI couldn't gauge my level
+
