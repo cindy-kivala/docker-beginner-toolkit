@@ -7,11 +7,31 @@ from pathlib import Path
 
 app = Flask(__name__)
 
+redis_client = None
+redis_available = False
+
 try:
-    redis_client = redis.Redis(host='redis', port=6379, decode_responses=True)
+    redis_url = os.getenv("REDIS_URL")
+
+    if redis_url:
+        # Railway / cloud Redis
+        redis_client = redis.from_url(redis_url, decode_responses=True)
+    else:
+        # Local Docker Compose Redis
+        redis_client = redis.Redis(
+            host="redis",
+            port=6379,
+            decode_responses=True
+        )
+
+    # Test connection
+    redis_client.ping()
     redis_available = True
-except:
+
+except Exception as e:
+    print("Redis not available:", e)
     redis_available = False
+
 
 tasks = []
 
