@@ -21,6 +21,10 @@
 - [ ] Common errors & solutions
 - [ ] AI-assisted learning documentation
 
+## Important to Note
+- Use curl or postman to test API endpoints
+- Always run **docker-compose down** to clear logs before running **docker-compose up --build**  to get to localhost
+
 ## 👤 Author
 
 **Cindy Kivala**  
