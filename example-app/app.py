@@ -1,6 +1,8 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 import os
 from datetime import datetime
+import json
+import redis
 
 app = Flask(__name__)
 
@@ -107,6 +109,51 @@ def reset():
         redis_client.set('visitor_count', 0)
         return {'message': 'Counter reset!', 'count': 0}, 200
     return {'error': 'Redis not available'}, 500
+
+tasks = []
+
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    """Get all tasks"""
+    return jsonify({
+        'tasks': tasks,
+        'count': len(tasks),
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/tasks', methods=['POST'])
+def add_task():
+    """Add a new task"""
+    data = request.get_json()
+    if not data or 'title' not in data:
+        return jsonify({'error': 'Title required'}), 400
+    
+    task = {
+        'id': len(tasks) + 1,
+        'title': data['title'],
+        'completed': False,
+        'created_at': datetime.now().isoformat()
+    }
+    tasks.append(task)
+    return jsonify(task), 201
+
+@app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    """Delete a task"""
+    global tasks
+    tasks = [t for t in tasks if t['id'] != task_id]
+    return jsonify({'message': 'Task deleted'}), 200
+
+@app.route('/api/stats')
+def stats():
+    """Container statistics"""
+    return jsonify({
+        'container_id': os.uname().nodename,
+        'uptime': datetime.now().isoformat(),
+        'total_tasks': len(tasks),
+        'python_version': os.sys.version,
+        'environment': 'Docker Container'
+    })
 
 
 if __name__ == '__main__':
